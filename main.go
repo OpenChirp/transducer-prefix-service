@@ -7,14 +7,17 @@
 package main
 
 import (
+	"io/ioutil"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
+	"github.com/sirupsen/logrus"
+
 	"github.com/openchirp/framework"
-	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
+	"github.com/wercker/journalhook"
 )
 
 const (
@@ -36,10 +39,10 @@ const (
 	keyTopicBase
 )
 
+var log *logrus.Logger
+
 // Device holds any data you want to keep around for a specific
 // device that has linked your service.
-//
-// In this example, we will keep track of the rawrx and rawtx message counts
 type Device struct {
 }
 
@@ -53,7 +56,7 @@ func NewDevice() framework.Device {
 // device, and is provided the service config for the linking device.
 func (d *Device) ProcessLink(ctrl *framework.DeviceControl) string {
 	logitem := log.WithField("OCID", ctrl.Id())
-	logitem.Debug("Linking with config:", ctrl.Config())
+	logitem.Info("Linking device")
 
 	// Subscribe to "+" topics
 	ctrl.Subscribe("+", keyTopicBase)
@@ -70,14 +73,13 @@ func (d *Device) ProcessLink(ctrl *framework.DeviceControl) string {
 // the device.
 func (d *Device) ProcessUnlink(ctrl *framework.DeviceControl) {
 	logitem := log.WithField("OCID", ctrl.Id())
-	logitem.Debug("Unlinked:")
+	logitem.Info("Unlinked")
 }
 
 // ProcessConfigChange is intended to handle a service config updates.
 func (d *Device) ProcessConfigChange(ctrl *framework.DeviceControl, cchanges, coriginal map[string]string) (string, bool) {
 	logitem := log.WithField("OCID", ctrl.Id())
-
-	logitem.Debug("Ignoring Config Change:", cchanges)
+	logitem.Info("Ignoring Config Change")
 	return "", false
 }
 
@@ -85,7 +87,7 @@ func (d *Device) ProcessConfigChange(ctrl *framework.DeviceControl, cchanges, co
 // this device.
 func (d *Device) ProcessMessage(ctrl *framework.DeviceControl, msg framework.Message) {
 	logitem := log.WithField("OCID", ctrl.Id())
-	logitem.Debugf("Processing Message: %v: [ % #x ]", msg.Key(), msg.Payload())
+	logitem.Debug("Processing Message")
 
 	if msg.Key().(int) == keyTopicBase {
 		subtopic := TransducerPrefix + "/" + msg.Topic()
@@ -101,7 +103,12 @@ func (d *Device) ProcessMessage(ctrl *framework.DeviceControl, msg framework.Mes
 // run is the main function that gets called once form main()
 func run(ctx *cli.Context) error {
 	/* Set logging level (verbosity) */
-	log.SetLevel(log.Level(uint32(ctx.Int("log-level"))))
+	log = logrus.New()
+	log.SetLevel(logrus.Level(uint32(ctx.Int("log-level"))))
+	if ctx.Bool("systemd") {
+		log.AddHook(&journalhook.JournalHook{})
+		log.Out = ioutil.Discard
+	}
 
 	log.Info("Starting Legacy Transducer Prefix Service")
 
@@ -189,6 +196,11 @@ func main() {
 			Value:  4,
 			Usage:  "debug=5, info=4, warning=3, error=2, fatal=1, panic=0",
 			EnvVar: "LOG_LEVEL",
+		},
+		cli.BoolFlag{
+			Name:   "systemd",
+			Usage:  "Indicates that this service can use systemd specific interfaces.",
+			EnvVar: "SYSTEMD",
 		},
 	}
 
