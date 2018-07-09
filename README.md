@@ -1,5 +1,8 @@
 # Legacy Transducer Prefix OpenChirp Service
 
 ## Overview
-This OpenChirp service allows users and other services to still use the device
-transducer/ prefix.
+This OpenChirp service bridges device data to the legacy device transducer prefix
+topic space.
+
+# Device Config
+None
