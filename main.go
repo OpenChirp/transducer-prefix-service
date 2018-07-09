@@ -1,17 +1,15 @@
 // Craig Hesling
-// November 26, 2017
+// July 9, 2018
 //
-// This is an example OpenChirp service that tracks the number of publications
-// to the rawrx and rawtx topics and publishes the count to the
-// rawrxcount and rawtxcount transducer topics.
-// This example demonstates argument/environment variable parsing,
-// setting up the service client, and handling device transducer data.
+// This service serves as a compatibility layer for those user and services that
+// expect data from on the /transducer/# subtopic prefix.
+// This service bridges <dev_id>/+ space with <dev_id>/transducer/+ space
 package main
 
 import (
-	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/openchirp/framework"
@@ -26,17 +24,16 @@ const (
 const (
 	// Set this value to true to have the service publish a service status of
 	// "Running" each time it receives a device update event
-	//
-	// This could be used as a service alive pulse if enabled
-	// Otherwise, the service status will indicate "Started" at the time the
-	// service "Started" the client
 	runningStatus = true
 )
 
 const (
-	// The subscription key used to identify a messages types
-	rawRxKey = 0
-	rawTxKey = 1
+	TransducerPrefix = "transducer"
+)
+
+const (
+	keyTopicTransducer int = iota
+	keyTopicBase
 )
 
 // Device holds any data you want to keep around for a specific
@@ -44,89 +41,58 @@ const (
 //
 // In this example, we will keep track of the rawrx and rawtx message counts
 type Device struct {
-	rawRxCount int
-	rawTxCount int
 }
 
 // NewDevice is called by the framework when a new device has been linked.
 func NewDevice() framework.Device {
 	d := new(Device)
-	// The following initialization is redundant in Go
-	d.rawRxCount = 0
-	d.rawTxCount = 0
-	// Change type to the Device interface
-	return framework.Device(d)
+	return d
 }
 
 // ProcessLink is called once, during the initial setup of a
 // device, and is provided the service config for the linking device.
 func (d *Device) ProcessLink(ctrl *framework.DeviceControl) string {
-	// This simply sets up console logging for our program.
-	// Any time this logitem is use to print messages,
-	// the key/value string "deviceid=<device_id>" is prepended to the line.
-	logitem := log.WithField("deviceid", ctrl.Id())
+	logitem := log.WithField("OCID", ctrl.Id())
 	logitem.Debug("Linking with config:", ctrl.Config())
 
-	// Subscribe to subtopic "transducer/rawrx"
-	ctrl.Subscribe(framework.TransducerPrefix+"/rawrx", rawRxKey)
-	// Subscribe to subtopic "transducer/rawtx"
-	ctrl.Subscribe(framework.TransducerPrefix+"/rawtx", rawTxKey)
+	// Subscribe to "+" topics
+	ctrl.Subscribe("+", keyTopicBase)
+
+	// Subscribe to "transducer/+" topics
+	ctrl.Subscribe(TransducerPrefix+"/+", keyTopicTransducer)
 
 	logitem.Debug("Finished Linking")
 
-	// This message is sent to the service status for the linking device
 	return "Success"
 }
 
 // ProcessUnlink is called once, when the service has been unlinked from
 // the device.
 func (d *Device) ProcessUnlink(ctrl *framework.DeviceControl) {
-	logitem := log.WithField("deviceid", ctrl.Id())
+	logitem := log.WithField("OCID", ctrl.Id())
 	logitem.Debug("Unlinked:")
-
-	// The framework already handles unsubscribing from all
-	// Device associted subtopics, so we don't need to call
-	// ctrl.Unsubscribe.
 }
 
 // ProcessConfigChange is intended to handle a service config updates.
-// If your program does not need to handle incremental config changes,
-// simply return false, to indicate the config update was unhandled.
-// The framework will then automatically issue a ProcessUnlink and then a
-// ProcessLink, instead. Note, NewDevice is not called.
-//
-// For more information about this or other Device interface functions,
-// please see https://godoc.org/github.com/OpenChirp/framework#Device .
 func (d *Device) ProcessConfigChange(ctrl *framework.DeviceControl, cchanges, coriginal map[string]string) (string, bool) {
-	logitem := log.WithField("deviceid", ctrl.Id())
+	logitem := log.WithField("OCID", ctrl.Id())
 
 	logitem.Debug("Ignoring Config Change:", cchanges)
 	return "", false
-
-	// If we have processed this config change, we should return the
-	// new service status message and true.
-	//
-	//logitem.Debug("Processing Config Change:", cchanges)
-	//return "Sucessfully updated", true
 }
 
 // ProcessMessage is called upon receiving a pubsub message destined for
 // this device.
-// Along with the standard DeviceControl object, the handler is provided
-// a Message object, which contains the received message's payload,
-// subtopic, and the provided Subscribe key.
 func (d *Device) ProcessMessage(ctrl *framework.DeviceControl, msg framework.Message) {
-	logitem := log.WithField("deviceid", ctrl.Id())
+	logitem := log.WithField("OCID", ctrl.Id())
 	logitem.Debugf("Processing Message: %v: [ % #x ]", msg.Key(), msg.Payload())
 
-	if msg.Key().(int) == rawRxKey {
-		d.rawRxCount++
-		subtopic := framework.TransducerPrefix + "/rawrxcount"
-		ctrl.Publish(subtopic, fmt.Sprint(d.rawRxCount))
-	} else if msg.Key().(int) == rawTxKey {
-		d.rawTxCount++
-		subtopic := framework.TransducerPrefix + "/rawtxcount"
-		ctrl.Publish(subtopic, fmt.Sprint(d.rawTxCount))
+	if msg.Key().(int) == keyTopicBase {
+		subtopic := TransducerPrefix + "/" + msg.Topic()
+		ctrl.Publish(subtopic, msg.Payload())
+	} else if msg.Key().(int) == keyTopicTransducer {
+		subtopic := strings.TrimPrefix(msg.Topic(), TransducerPrefix+"/")
+		ctrl.Publish(subtopic, msg.Payload())
 	} else {
 		logitem.Errorln("Received unassociated message")
 	}
@@ -137,9 +103,10 @@ func run(ctx *cli.Context) error {
 	/* Set logging level (verbosity) */
 	log.SetLevel(log.Level(uint32(ctx.Int("log-level"))))
 
-	log.Info("Starting Example Service")
+	log.Info("Starting Legacy Transducer Prefix Service")
 
 	/* Start framework service client */
+	framework.MQTTBridgeClient = true
 	c, err := framework.StartServiceClientManaged(
 		ctx.String("framework-server"),
 		ctx.String("mqtt-server"),
@@ -189,9 +156,9 @@ func run(ctx *cli.Context) error {
 func main() {
 	/* Parse arguments and environmental variable */
 	app := cli.NewApp()
-	app.Name = "example-service"
+	app.Name = "transducer-prefix-service"
 	app.Usage = ""
-	app.Copyright = "See https://github.com/openchirp/example-service for copyright information"
+	app.Copyright = "See https://github.com/openchirp/transducer-prefix-service for copyright information"
 	app.Version = version
 	app.Action = run
 	app.Flags = []cli.Flag{
@@ -204,7 +171,7 @@ func main() {
 		cli.StringFlag{
 			Name:   "mqtt-server",
 			Usage:  "MQTT server's URI (e.g. scheme://host:port where scheme is tcp or tls)",
-			Value:  "tls://localhost:1883",
+			Value:  "tls://localhost:8883",
 			EnvVar: "MQTT_SERVER",
 		},
 		cli.StringFlag{
